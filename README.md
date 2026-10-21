@@ -83,7 +83,43 @@ GraphQL usa un *resolver por defecto* que lee la propiedad con el mismo nombre d
   3. Para cada autor: `name` usa el resolver por defecto.
 
   Ojo: `Book.author` se ejecuta **una vez por libro**. Con una BD real serían N consultas (problema N+1, paso 9).
-- [ ] Paso 6: Mutations (`addBook`, `updateBook`, `deleteBook`, `addAuthor`)
+- [x] **Paso 6: Mutations**: `addAuthor`, `addBook`, `updateBook`, `deleteBook`.
+
+  Las mutations se escriben con la palabra `mutation` y modifican los datos **en memoria**
+  (se pierden al reiniciar el servidor). Cada una devuelve el recurso resultante, así puedes
+  pedir en la misma petición los campos que quieras del objeto creado.
+
+  ```graphql
+  mutation {
+    addAuthor(input: { name: "Mario Vargas Llosa" }) { id name }
+  }
+
+  mutation {
+    addBook(input: { title: "La ciudad y los perros", year: 1963, authorId: "4" }) {
+      id title author { name }
+    }
+  }
+
+  mutation {
+    updateBook(id: "5", input: { year: 1964 }) { title year }   # solo cambia lo enviado
+  }
+
+  mutation {
+    deleteBook(id: "5")   # true si existía, false si no
+  }
+  ```
+
+  Casos límite para probar:
+  - `addBook` con `authorId: "99"` → error `BAD_USER_INPUT` (`data: null`, porque el campo es `Book!`).
+  - `updateBook` con un id inexistente → `null`, sin error (el campo es nullable).
+  - `addAuthor(input: {})` → error de validación, falta `name` (`String!`).
+
+  Conceptos:
+  - **`input` vs `type`**: `input` es para *enviar* datos, `type` para *devolverlos*. No se pueden mezclar.
+  - **Query vs Mutation**: técnicamente son iguales, pero los campos de una mutation raíz se ejecutan
+    **en serie** (en orden) y los de una query pueden ejecutarse en paralelo. Por eso las escrituras van en `Mutation`.
+  - **Actualización parcial**: `UpdateBookInput` tiene todos los campos opcionales y el resolver usa `??`
+    para conservar el valor actual de lo que no se envía.
 - [ ] Paso 7: Variables, alias y fragments
 - [ ] Paso 8: Context y manejo de errores
 - [ ] Paso 9: Problema N+1 y DataLoader

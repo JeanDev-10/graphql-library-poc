@@ -1,3 +1,4 @@
+import { GraphQLError } from 'graphql';
 import { authors, books, type AuthorRecord, type BookRecord } from './data.js';
 
 // Schema (SDL). El comentario #graphql activa el resaltado de sintaxis en editores.
@@ -31,7 +32,60 @@ export const typeDefs = `#graphql
     "Un autor por id. Devuelve null si no existe."
     author(id: ID!): Author
   }
+
+  # "input" es el tipo de objeto para ENVIAR datos. Los "type" solo sirven para devolver.
+  input AddAuthorInput {
+    name: String!
+  }
+
+  input AddBookInput {
+    title: String!
+    year: Int!
+    authorId: ID!
+  }
+
+  # Todos opcionales: solo se cambia lo que el cliente envíe (actualización parcial).
+  input UpdateBookInput {
+    title: String
+    year: Int
+    authorId: ID
+  }
+
+  type Mutation {
+    "Crea un autor"
+    addAuthor(input: AddAuthorInput!): Author!
+    "Crea un libro para un autor existente"
+    addBook(input: AddBookInput!): Book!
+    "Actualiza campos de un libro. Devuelve null si el libro no existe."
+    updateBook(id: ID!, input: UpdateBookInput!): Book
+    "Elimina un libro. Devuelve true si existía."
+    deleteBook(id: ID!): Boolean!
+  }
 `;
+
+interface AddAuthorArgs {
+  input: { name: string };
+}
+interface AddBookArgs {
+  input: { title: string; year: number; authorId: string };
+}
+interface UpdateBookArgs {
+  id: string;
+  input: { title?: string | null; year?: number | null; authorId?: string | null };
+}
+
+// Genera el siguiente id numérico como string (en una BD real lo haría la BD).
+const nextId = (items: { id: string }[]) =>
+  String(Math.max(0, ...items.map((i) => Number(i.id))) + 1);
+
+// Falla con un error de GraphQL si el autor no existe. Se ampliará en el paso 8.
+function assertAuthorExists(authorId: string) {
+  if (!authors.some((a) => a.id === authorId)) {
+    throw new GraphQLError(`El autor con id ${authorId} no existe`, {
+      extensions: { code: 'BAD_USER_INPUT' },
+    });
+  }
+}
 
 // Los argumentos que llegan al resolver (2º parámetro) tienen la forma del schema.
 interface IdArgs {
@@ -50,6 +104,38 @@ export const resolvers = {
     // que es lo que GraphQL espera para un campo nullable (Book, sin "!").
     book: (_parent: unknown, args: IdArgs) => books.find((b) => b.id === args.id) ?? null,
     author: (_parent: unknown, args: IdArgs) => authors.find((a) => a.id === args.id) ?? null,
+  },
+
+  // Las mutations modifican los datos y devuelven el recurso resultante, para que el
+  // cliente pueda pedir en la misma petición los campos que quiera del objeto creado.
+  Mutation: {
+    addAuthor: (_parent: unknown, { input }: AddAuthorArgs) => {
+      const author: AuthorRecord = { id: nextId(authors), name: input.name };
+      authors.push(author);
+      return author;
+    },
+    addBook: (_parent: unknown, { input }: AddBookArgs) => {
+      assertAuthorExists(input.authorId);
+      const book: BookRecord = { id: nextId(books), ...input };
+      books.push(book);
+      return book;
+    },
+    updateBook: (_parent: unknown, { id, input }: UpdateBookArgs) => {
+      const book = books.find((b) => b.id === id);
+      if (!book) return null;
+      if (input.authorId != null) assertAuthorExists(input.authorId);
+      // `??` conserva el valor actual si el cliente no envió el campo (o envió null).
+      book.title = input.title ?? book.title;
+      book.year = input.year ?? book.year;
+      book.authorId = input.authorId ?? book.authorId;
+      return book;
+    },
+    deleteBook: (_parent: unknown, { id }: { id: string }) => {
+      const index = books.findIndex((b) => b.id === id);
+      if (index === -1) return false;
+      books.splice(index, 1);
+      return true;
+    },
   },
 
   // Resolvers de tipo: se ejecutan cuando el cliente pide ese campo dentro de un Book/Author.

@@ -57,7 +57,16 @@ GraphQL usa un *resolver por defecto* que lee la propiedad con el mismo nombre d
   ```
   Prueba también pedir un campo que no existe (`books { title author }`): GraphQL lo rechaza
   *antes de ejecutar nada* con `GRAPHQL_VALIDATION_FAILED`. Eso es el schema actuando como contrato.
-- [ ] Paso 4: Queries (`books`, `book(id)`, `authors`, `author(id)`)
+- [x] **Paso 4: Queries con argumentos**: `book(id)` y `author(id)`.
+  ```graphql
+  query {
+    book(id: "3") { title year }
+    autor: author(id: "2") { name }   # "autor" es un alias
+  }
+  ```
+  - Id inexistente (`book(id: "99")`) → `{ "data": { "book": null } }`, sin error, porque el campo es nullable (`Book`, sin `!`).
+  - Omitir el id → error de validación, porque el argumento es obligatorio (`ID!`).
+  - Los argumentos llegan al resolver como 2º parámetro: `(parent, args, context, info)`.
 - [ ] Paso 5: Resolvers anidados (`Book.author`, `Author.books`)
 - [ ] Paso 6: Mutations (`addBook`, `updateBook`, `deleteBook`, `addAuthor`)
 - [ ] Paso 7: Variables, alias y fragments

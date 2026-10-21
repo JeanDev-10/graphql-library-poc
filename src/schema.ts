@@ -22,8 +22,17 @@ export const typeDefs = `#graphql
     books: [Book!]!
     "Todos los autores"
     authors: [Author!]!
+    "Un libro por id. Devuelve null si no existe."
+    book(id: ID!): Book
+    "Un autor por id. Devuelve null si no existe."
+    author(id: ID!): Author
   }
 `;
+
+// Los argumentos que llegan al resolver (2º parámetro) tienen la forma del schema.
+interface IdArgs {
+  id: string;
+}
 
 // Un resolver por campo que lo necesite. Query.books y Query.authors devuelven
 // los arreglos; los campos de Book y Author (id, title...) usan el resolver
@@ -32,5 +41,10 @@ export const resolvers = {
   Query: {
     books: () => books,
     authors: () => authors,
+    // Firma completa: (parent, args, context, info). En un campo raíz parent no se usa.
+    // find() devuelve undefined si no hay coincidencia; `?? null` lo convierte en null,
+    // que es lo que GraphQL espera para un campo nullable (Book, sin "!").
+    book: (_parent: unknown, args: IdArgs) => books.find((b) => b.id === args.id) ?? null,
+    author: (_parent: unknown, args: IdArgs) => authors.find((a) => a.id === args.id) ?? null,
   },
 };

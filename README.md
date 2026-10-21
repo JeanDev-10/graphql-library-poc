@@ -67,7 +67,22 @@ GraphQL usa un *resolver por defecto* que lee la propiedad con el mismo nombre d
   - Id inexistente (`book(id: "99")`) → `{ "data": { "book": null } }`, sin error, porque el campo es nullable (`Book`, sin `!`).
   - Omitir el id → error de validación, porque el argumento es obligatorio (`ID!`).
   - Los argumentos llegan al resolver como 2º parámetro: `(parent, args, context, info)`.
-- [ ] Paso 5: Resolvers anidados (`Book.author`, `Author.books`)
+- [x] **Paso 5: Resolvers anidados**: `Book.author` y `Author.books`.
+  ```graphql
+  query {
+    books { title author { name } }
+    authors { name books { title } }
+  }
+  ```
+  El grafo es navegable en ambos sentidos y a cualquier profundidad (libro → autor → libros → autor...).
+  La profundidad la elige el cliente, algo que en REST requeriría endpoints nuevos.
+
+  **Cómo se ejecuta `books { title author { name } }`:**
+  1. `Query.books` devuelve 4 `BookRecord`.
+  2. Para cada libro: `title` usa el resolver por defecto y `Book.author(book)` busca el autor por `book.authorId`.
+  3. Para cada autor: `name` usa el resolver por defecto.
+
+  Ojo: `Book.author` se ejecuta **una vez por libro**. Con una BD real serían N consultas (problema N+1, paso 9).
 - [ ] Paso 6: Mutations (`addBook`, `updateBook`, `deleteBook`, `addAuthor`)
 - [ ] Paso 7: Variables, alias y fragments
 - [ ] Paso 8: Context y manejo de errores

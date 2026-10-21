@@ -1,4 +1,4 @@
-import { authors, books } from './data.js';
+import { authors, books, type AuthorRecord, type BookRecord } from './data.js';
 
 // Schema (SDL). El comentario #graphql activa el resaltado de sintaxis en editores.
 // Las cadenas entre """ """ son descripciones: aparecen en Apollo Sandbox.
@@ -9,12 +9,16 @@ export const typeDefs = `#graphql
     title: String!
     "Año de publicación"
     year: Int!
+    "Autor del libro (se resuelve desde authorId)"
+    author: Author!
   }
 
   """Una persona que escribe libros."""
   type Author {
     id: ID!
     name: String!
+    "Libros escritos por este autor"
+    books: [Book!]!
   }
 
   type Query {
@@ -46,5 +50,16 @@ export const resolvers = {
     // que es lo que GraphQL espera para un campo nullable (Book, sin "!").
     book: (_parent: unknown, args: IdArgs) => books.find((b) => b.id === args.id) ?? null,
     author: (_parent: unknown, args: IdArgs) => authors.find((a) => a.id === args.id) ?? null,
+  },
+
+  // Resolvers de tipo: se ejecutan cuando el cliente pide ese campo dentro de un Book/Author.
+  // El `parent` es lo que devolvió el resolver del nivel anterior (un BookRecord, un AuthorRecord).
+  Book: {
+    // BookRecord solo tiene authorId; aquí lo "traducimos" al objeto Author que promete el schema.
+    // El `!` del schema garantiza que no puede ser null, por eso usamos `!` en TypeScript.
+    author: (book: BookRecord) => authors.find((a) => a.id === book.authorId)!,
+  },
+  Author: {
+    books: (author: AuthorRecord) => books.filter((b) => b.authorId === author.id),
   },
 };

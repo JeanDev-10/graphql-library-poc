@@ -1,21 +1,8 @@
 import { ApolloServer } from '@apollo/server';
 import { startStandaloneServer } from '@apollo/server/standalone';
+import { typeDefs, resolvers } from './schema.js';
 
-// 1. Schema: el contrato. Describe QUÉ se puede pedir.
-const typeDefs = `#graphql
-  type Query {
-    hello: String!
-  }
-`;
-
-// 2. Resolvers: las funciones que dicen DE DÓNDE sale cada campo.
-const resolvers = {
-  Query: {
-    hello: () => 'Hola GraphQL 👋',
-  },
-};
-
-// 3. Servidor: une schema + resolvers y lo expone por HTTP.
+// Servidor: une schema + resolvers y lo expone por HTTP en un único endpoint.
 const server = new ApolloServer({ typeDefs, resolvers });
 
 const { url } = await startStandaloneServer(server, {

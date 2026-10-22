@@ -1,5 +1,6 @@
-import { GraphQLError } from 'graphql';
-import { authors, books, type AuthorRecord, type BookRecord } from './data.js';
+import type { AuthorRecord, BookRecord } from './data.js';
+import type { Context, Db } from './context.js';
+import { badUserInput, forbidden } from './errors.js';
 
 // Schema (SDL). El comentario #graphql activa el resaltado de sintaxis en editores.
 // Las cadenas entre """ """ son descripciones: aparecen en Apollo Sandbox.
@@ -58,7 +59,7 @@ export const typeDefs = `#graphql
     addBook(input: AddBookInput!): Book!
     "Actualiza campos de un libro. Devuelve null si el libro no existe."
     updateBook(id: ID!, input: UpdateBookInput!): Book
-    "Elimina un libro. Devuelve true si existía."
+    "Elimina un libro. Devuelve true si existía. Requiere el header x-role: admin."
     deleteBook(id: ID!): Boolean!
   }
 `;
@@ -78,12 +79,11 @@ interface UpdateBookArgs {
 const nextId = (items: { id: string }[]) =>
   String(Math.max(0, ...items.map((i) => Number(i.id))) + 1);
 
-// Falla con un error de GraphQL si el autor no existe. Se ampliará en el paso 8.
-function assertAuthorExists(authorId: string) {
-  if (!authors.some((a) => a.id === authorId)) {
-    throw new GraphQLError(`El autor con id ${authorId} no existe`, {
-      extensions: { code: 'BAD_USER_INPUT' },
-    });
+// Falla con un error con código (BAD_USER_INPUT) si el autor no existe.
+// `argumentName` viaja en extensions para que el cliente sepa qué campo corregir.
+function assertAuthorExists(db: Db, authorId: string) {
+  if (!db.authors.some((a) => a.id === authorId)) {
+    throw badUserInput(`El autor con id ${authorId} no existe`, { argumentName: 'authorId' });
   }
 }
 
@@ -95,45 +95,50 @@ interface IdArgs {
 // Un resolver por campo que lo necesite. Query.books y Query.authors devuelven
 // los arreglos; los campos de Book y Author (id, title...) usan el resolver
 // por defecto de GraphQL, que simplemente lee la propiedad con el mismo nombre.
+// Firma completa: (parent, args, context, info). Los datos ya no se importan:
+// llegan en `context.db` (paso 8).
 export const resolvers = {
   Query: {
-    books: () => books,
-    authors: () => authors,
-    // Firma completa: (parent, args, context, info). En un campo raíz parent no se usa.
+    books: (_parent: unknown, _args: unknown, { db }: Context) => db.books,
+    authors: (_parent: unknown, _args: unknown, { db }: Context) => db.authors,
     // find() devuelve undefined si no hay coincidencia; `?? null` lo convierte en null,
     // que es lo que GraphQL espera para un campo nullable (Book, sin "!").
-    book: (_parent: unknown, args: IdArgs) => books.find((b) => b.id === args.id) ?? null,
-    author: (_parent: unknown, args: IdArgs) => authors.find((a) => a.id === args.id) ?? null,
+    book: (_parent: unknown, args: IdArgs, { db }: Context) =>
+      db.books.find((b) => b.id === args.id) ?? null,
+    author: (_parent: unknown, args: IdArgs, { db }: Context) =>
+      db.authors.find((a) => a.id === args.id) ?? null,
   },
 
   // Las mutations modifican los datos y devuelven el recurso resultante, para que el
   // cliente pueda pedir en la misma petición los campos que quiera del objeto creado.
   Mutation: {
-    addAuthor: (_parent: unknown, { input }: AddAuthorArgs) => {
-      const author: AuthorRecord = { id: nextId(authors), name: input.name };
-      authors.push(author);
+    addAuthor: (_parent: unknown, { input }: AddAuthorArgs, { db }: Context) => {
+      const author: AuthorRecord = { id: nextId(db.authors), name: input.name };
+      db.authors.push(author);
       return author;
     },
-    addBook: (_parent: unknown, { input }: AddBookArgs) => {
-      assertAuthorExists(input.authorId);
-      const book: BookRecord = { id: nextId(books), ...input };
-      books.push(book);
+    addBook: (_parent: unknown, { input }: AddBookArgs, { db }: Context) => {
+      assertAuthorExists(db, input.authorId);
+      const book: BookRecord = { id: nextId(db.books), ...input };
+      db.books.push(book);
       return book;
     },
-    updateBook: (_parent: unknown, { id, input }: UpdateBookArgs) => {
-      const book = books.find((b) => b.id === id);
+    updateBook: (_parent: unknown, { id, input }: UpdateBookArgs, { db }: Context) => {
+      const book = db.books.find((b) => b.id === id);
       if (!book) return null;
-      if (input.authorId != null) assertAuthorExists(input.authorId);
+      if (input.authorId != null) assertAuthorExists(db, input.authorId);
       // `??` conserva el valor actual si el cliente no envió el campo (o envió null).
       book.title = input.title ?? book.title;
       book.year = input.year ?? book.year;
       book.authorId = input.authorId ?? book.authorId;
       return book;
     },
-    deleteBook: (_parent: unknown, { id }: { id: string }) => {
-      const index = books.findIndex((b) => b.id === id);
+    deleteBook: (_parent: unknown, { id }: IdArgs, { db, role }: Context) => {
+      // Autorización: el contexto sabe QUIÉN pregunta; el resolver decide si puede.
+      if (role !== 'admin') throw forbidden('Solo un admin puede eliminar libros');
+      const index = db.books.findIndex((b) => b.id === id);
       if (index === -1) return false;
-      books.splice(index, 1);
+      db.books.splice(index, 1);
       return true;
     },
   },
@@ -143,9 +148,11 @@ export const resolvers = {
   Book: {
     // BookRecord solo tiene authorId; aquí lo "traducimos" al objeto Author que promete el schema.
     // El `!` del schema garantiza que no puede ser null, por eso usamos `!` en TypeScript.
-    author: (book: BookRecord) => authors.find((a) => a.id === book.authorId)!,
+    author: (book: BookRecord, _args: unknown, { db }: Context) =>
+      db.authors.find((a) => a.id === book.authorId)!,
   },
   Author: {
-    books: (author: AuthorRecord) => books.filter((b) => b.authorId === author.id),
+    books: (author: AuthorRecord, _args: unknown, { db }: Context) =>
+      db.books.filter((b) => b.authorId === author.id),
   },
 };

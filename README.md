@@ -56,6 +56,8 @@ con el header `Content-Type: application/json`.
 | **Schema (`typeDefs`)** | Contrato tipado: qué datos y operaciones existen | `src/schema.ts` |
 | **Resolvers** | Funciones que obtienen el valor de cada campo | `src/schema.ts` |
 | **Datos** | "Base de datos" en memoria (libros y autores) | `src/data.ts` |
+| **Context** | Objeto por petición con `db` y `role`, 3.er argumento de los resolvers | `src/context.ts` |
+| **Errores** | Errores con código y enmascarado de errores internos | `src/errors.ts` |
 | **Servidor** | Une schema + resolvers y los expone por HTTP en un único endpoint | `src/index.ts` |
 
 ### Resolver por defecto
@@ -127,7 +129,7 @@ GraphQL usa un *resolver por defecto* que lee la propiedad con el mismo nombre d
   }
 
   mutation {
-    deleteBook(id: "5")   # true si existía, false si no
+    deleteBook(id: "5")   # true si existía, false si no. Requiere el header x-role: admin (paso 8)
   }
   ```
 
@@ -193,6 +195,43 @@ GraphQL usa un *resolver por defecto* que lee la propiedad con el mismo nombre d
   | Usar `$id` sin declararla | `Variable "$id" is not defined.` |
   | Declarar `$x` y no usarla | `Variable "$x" is never used.` |
   | No enviar una variable `ID!` | `Variable "$id" of required type "ID!" was not provided.` |
-- [ ] Paso 8: Context y manejo de errores
+- [x] **Paso 8: Context y manejo de errores**
+
+  **Context.** Objeto que se crea **una vez por petición** (`src/context.ts`) y llega como 3.er argumento a
+  todos los resolvers. Aquí lleva `db` (acceso a datos, ya no se importan directamente) y `role`
+  (quién pregunta). Es el lugar natural para el usuario autenticado, conexiones a BD y, en el paso 9, los DataLoaders.
+
+  **Autorización de juguete.** `deleteBook` exige el header `x-role: admin`. En Insomnia: pestaña **Header** →
+  `x-role` = `admin`. Sin él:
+  ```json
+  { "errors": [{ "message": "Solo un admin puede eliminar libros", "extensions": { "code": "FORBIDDEN" } }], "data": null }
+  ```
+  y el status HTTP es **403** (se fija con `extensions.http.status`; por defecto GraphQL responde 200).
+  En producción aquí se validaría un JWT/sesión; el header es solo para aprender.
+
+  **Errores con código.** `src/errors.ts` define `badUserInput` y `forbidden`: lanzan un `GraphQLError` con
+  `extensions.code` estable. El cliente decide según el código, no según el texto del mensaje.
+  ```json
+  { "message": "El autor con id 99 no existe", "path": ["addBook"],
+    "extensions": { "code": "BAD_USER_INPUT", "argumentName": "authorId" } }
+  ```
+
+  **Errores inesperados (bugs, BD caída).** `formatError` los enmascara: el cliente solo ve
+  `Error interno del servidor` (`INTERNAL_SERVER_ERROR`) y el detalle real se escribe en el log del servidor.
+  Así no se filtran contraseñas, hosts ni rutas.
+
+  **Stacktrace.** Ya no se envía por defecto. Para depurar: `INCLUDE_STACKTRACE=true npm run dev`
+  (en PowerShell: `$env:INCLUDE_STACKTRACE="true"; npm run dev`).
+
+  **Resultados parciales y propagación de `null`.** Una respuesta puede traer `data` **y** `errors` a la vez:
+  | Caso | Resultado |
+  |---|---|
+  | `addBook` con autor inexistente (campo `Book!`) | `data: null` (el `null` sube hasta la raíz) |
+  | `updateBook` con `authorId` inexistente (campo `Book`, nullable) | `data: { updateBook: null }` + `errors` |
+  | `{ a: book(id:"2"){title} b: book(id:"99"){title} }` | `b: null` sin error; `a` llega bien |
+  | Un campo `!` que devuelve `null` dentro de una lista `[Book!]!` | falla toda la lista → `data: null` |
+
+  Regla: cuando un campo `!` falla, el `null` sube hasta el primer padre **nullable**. Por eso conviene que
+  los campos que pueden fallar sean nullable: así un fallo no tumba toda la respuesta.
 - [ ] Paso 9: Problema N+1 y DataLoader
 - [ ] Paso 10: Separar en módulos

@@ -1,6 +1,7 @@
-// "Base de datos" en memoria. Más adelante la mutamos desde las mutations.
-// Ojo: estas interfaces describen los datos INTERNOS, no el schema de GraphQL.
-// El schema puede exponer una forma distinta (p. ej. Book.author en vez de authorId).
+// Datos SEMILLA: se insertan en SQLite solo la primera vez (ver database.ts).
+// Ojo: estas interfaces describen los datos como los ve la APLICACIÓN (ids en string, como el tipo ID
+// de GraphQL), no las columnas de la BD (id INTEGER, author_id). El Repository traduce entre ambos.
+// El schema de GraphQL puede exponer otra forma distinta (p. ej. Book.author en vez de authorId).
 
 export interface AuthorRecord {
   id: string;

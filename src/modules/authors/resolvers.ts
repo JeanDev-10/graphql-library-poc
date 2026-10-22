@@ -1,6 +1,6 @@
 import type { AuthorRecord } from '../../data.js';
 import type { Context } from '../../context.js';
-import { nextId, type IdArgs } from '../../shared.js';
+import type { IdArgs } from '../../shared.js';
 
 interface AddAuthorArgs {
   input: { name: string };
@@ -19,11 +19,9 @@ export const resolvers = {
   // Las mutations modifican los datos y devuelven el recurso resultante, para que el
   // cliente pueda pedir en la misma petición los campos que quiera del objeto creado.
   Mutation: {
-    addAuthor: (_parent: unknown, { input }: AddAuthorArgs, { db }: Context) => {
-      const author: AuthorRecord = { id: nextId(db.authors), name: input.name };
-      db.authors.push(author);
-      return author;
-    },
+    // El id lo asigna la BD (AUTOINCREMENT) y vuelve en la misma sentencia con RETURNING.
+    addAuthor: (_parent: unknown, { input }: AddAuthorArgs, { repo }: Context) =>
+      repo.insertAuthor(input.name),
   },
 
   // Resolver de tipo: se ejecuta cuando el cliente pide `books` dentro de un Author.

@@ -7,7 +7,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:reset": "node -e \"require('node:fs').rmSync('data/library.db',{force:true});console.log('BD borrada: se vuelve a crear con los datos semilla al arrancar')\""
   },
   "keywords": [],
   "author": "",

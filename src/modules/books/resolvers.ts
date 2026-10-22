@@ -1,8 +1,8 @@
 import type { BookRecord } from '../../data.js';
 import type { Context } from '../../context.js';
-import type { Db } from '../../repository.js';
+import type { Repository } from '../../repository.js';
 import { badUserInput, forbidden } from '../../errors.js';
-import { nextId, type IdArgs } from '../../shared.js';
+import type { IdArgs } from '../../shared.js';
 
 interface AddBookArgs {
   input: { title: string; year: number; authorId: string };
@@ -14,8 +14,9 @@ interface UpdateBookArgs {
 
 // Falla con un error con código (BAD_USER_INPUT) si el autor no existe.
 // `argumentName` viaja en extensions para que el cliente sepa qué campo corregir.
-function assertAuthorExists(db: Db, authorId: string) {
-  if (!db.authors.some((a) => a.id === authorId)) {
+// (La BD también lo impediría con la clave foránea, pero con un error técnico y sin código.)
+async function assertAuthorExists(repo: Repository, authorId: string) {
+  if (!(await repo.authorById(authorId))) {
     throw badUserInput(`El autor con id ${authorId} no existe`, { argumentName: 'authorId' });
   }
 }
@@ -28,34 +29,34 @@ export const resolvers = {
   },
 
   Mutation: {
-    addBook: (_parent: unknown, { input }: AddBookArgs, { db, loaders }: Context) => {
-      assertAuthorExists(db, input.authorId);
-      const book: BookRecord = { id: nextId(db.books), ...input };
-      db.books.push(book);
+    addBook: async (_parent: unknown, { input }: AddBookArgs, { repo, loaders }: Context) => {
+      await assertAuthorExists(repo, input.authorId);
+      const book = await repo.insertBook(input);
       // Los loaders cachean durante la petición: tras escribir hay que invalidar lo afectado.
       loaders.booksByAuthorId.clear(input.authorId);
       return book;
     },
-    updateBook: (_parent: unknown, { id, input }: UpdateBookArgs, { db, loaders }: Context) => {
-      const book = db.books.find((b) => b.id === id);
-      if (!book) return null;
-      if (input.authorId != null) assertAuthorExists(db, input.authorId);
-      loaders.booksByAuthorId.clear(book.authorId); // autor anterior
+    updateBook: async (
+      _parent: unknown,
+      { id, input }: UpdateBookArgs,
+      { repo, loaders }: Context,
+    ) => {
+      const current = await repo.bookById(id);
+      if (!current) return null;
+      if (input.authorId != null) await assertAuthorExists(repo, input.authorId);
+      const updated = await repo.updateBook(id, input);
+      loaders.booksByAuthorId.clear(current.authorId); // autor anterior
       if (input.authorId != null) loaders.booksByAuthorId.clear(input.authorId); // autor nuevo
-      // `??` conserva el valor actual si el cliente no envió el campo (o envió null).
-      book.title = input.title ?? book.title;
-      book.year = input.year ?? book.year;
-      book.authorId = input.authorId ?? book.authorId;
-      return book;
+      return updated ?? null;
     },
-    deleteBook: (_parent: unknown, { id }: IdArgs, { db, loaders, role }: Context) => {
+    deleteBook: async (_parent: unknown, { id }: IdArgs, { repo, loaders, role }: Context) => {
       // Autorización: el contexto sabe QUIÉN pregunta; el resolver decide si puede.
       if (role !== 'admin') throw forbidden('Solo un admin puede eliminar libros');
-      const index = db.books.findIndex((b) => b.id === id);
-      if (index === -1) return false;
-      loaders.booksByAuthorId.clear(db.books[index]!.authorId);
-      db.books.splice(index, 1);
-      return true;
+      const current = await repo.bookById(id);
+      if (!current) return false;
+      const deleted = await repo.deleteBook(id);
+      loaders.booksByAuthorId.clear(current.authorId);
+      return deleted;
     },
   },
 

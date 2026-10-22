@@ -32,7 +32,8 @@ curl -X POST http://localhost:4000/ -H "Content-Type: application/json" \
 1. Nueva request `POST` a `http://localhost:4000/`.
 2. En **Body** elige **GraphQL**: verás una caja para la **Query** y otra para las **Variables** (solo el JSON de variables).
 3. Usa *Refresh Schema* para tener autocompletado (usa introspección).
-4. Reinicia el servidor para volver a los datos iniciales (autores `1-3`, libros `1-4`).
+4. Los datos viven en SQLite y **persisten entre reinicios**. Para volver a los datos iniciales
+   (autores `1-3`, libros `1-4`): detén el servidor y ejecuta `npm run db:reset`.
 
 Si prefieres JSON crudo (*raw → JSON*), el body es:
 ```json
@@ -56,10 +57,10 @@ con el header `Content-Type: application/json`.
 | **Schema (`typeDefs`)** | Contrato tipado: qué datos y operaciones existen | `src/modules/*/typeDefs.ts` |
 | **Resolvers** | Funciones que obtienen el valor de cada campo | `src/modules/*/resolvers.ts` |
 | **Ensamblado** | Junta los módulos en un único schema | `src/schema.ts` |
-| **Datos** | "Base de datos" en memoria (libros y autores) | `src/data.ts` |
-| **Context** | Objeto por petición con `db` y `role`, 3.er argumento de los resolvers | `src/context.ts` |
+| **Base de datos** | SQLite (`node:sqlite`): conexión, tablas y semilla | `src/database.ts`, `src/data.ts` |
+| **Context** | Objeto por petición con `repo`, `loaders` y `role`, 3.er argumento de los resolvers | `src/context.ts` |
 | **Errores** | Errores con código y enmascarado de errores internos | `src/errors.ts` |
-| **Repository** | Capa de acceso a datos que simula SQL y cuenta consultas | `src/repository.ts` |
+| **Repository** | Único lugar con SQL (consultas parametrizadas); anota las sentencias ejecutadas | `src/repository.ts` |
 | **DataLoader** | Agrupa lecturas en lotes y cachea por petición (soluciona N+1) | `src/context.ts` |
 | **Plugin** | Muestra el nº de consultas por petición (`extensions.dbQueries`) | `src/plugins.ts` |
 | **Servidor** | Une schema + resolvers y los expone por HTTP en un único endpoint | `src/index.ts` |
@@ -113,8 +114,8 @@ GraphQL usa un *resolver por defecto* que lee la propiedad con el mismo nombre d
   Ojo: `Book.author` se ejecuta **una vez por libro**. Con una BD real serían N consultas (problema N+1, paso 9).
 - [x] **Paso 6: Mutations**: `addAuthor`, `addBook`, `updateBook`, `deleteBook`.
 
-  Las mutations se escriben con la palabra `mutation` y modifican los datos **en memoria**
-  (se pierden al reiniciar el servidor). Cada una devuelve el recurso resultante, así puedes
+  Las mutations se escriben con la palabra `mutation` y modifican los datos (en este paso vivían
+  **en memoria**; desde el paso 11 se guardan en SQLite). Cada una devuelve el recurso resultante, así puedes
   pedir en la misma petición los campos que quieras del objeto creado.
 
   ```graphql
@@ -202,7 +203,7 @@ GraphQL usa un *resolver por defecto* que lee la propiedad con el mismo nombre d
 - [x] **Paso 8: Context y manejo de errores**
 
   **Context.** Objeto que se crea **una vez por petición** (`src/context.ts`) y llega como 3.er argumento a
-  todos los resolvers. Aquí lleva `db` (acceso a datos, ya no se importan directamente) y `role`
+  todos los resolvers. Aquí lleva el acceso a datos (ya no se importan directamente) y `role`
   (quién pregunta). Es el lugar natural para el usuario autenticado, conexiones a BD y, en el paso 9, los DataLoaders.
 
   **Autorización de juguete.** `deleteBook` exige el header `x-role: admin`. En Insomnia: pestaña **Header** →
@@ -242,7 +243,8 @@ GraphQL usa un *resolver por defecto* que lee la propiedad con el mismo nombre d
   **El problema.** `Book.author` se ejecuta una vez por libro. Con una BD real, cada ejecución sería una
   consulta SQL: 1 consulta para la lista + N para los autores = **N+1**. Con 4 libros ya son 5; con 1000, 1001.
 
-  **Cómo se mide.** `src/repository.ts` simula la BD y anota cada "consulta SQL". Un plugin (`src/plugins.ts`)
+  **Cómo se mide.** `src/repository.ts` anota cada consulta SQL que ejecuta (en este paso la BD era simulada;
+  desde el paso 11 son sentencias reales de SQLite). Un plugin (`src/plugins.ts`)
   las cuenta: la lista completa sale en la consola del servidor y el número viaja en la respuesta, en
   `extensions.dbQueries` (solo para la PoC; en producción no se expondría). Pruébalo en Insomnia: el campo
   aparece junto a `data`, y el log del servidor muestra las consultas.
@@ -285,7 +287,8 @@ GraphQL usa un *resolver por defecto* que lee la propiedad con el mismo nombre d
   src/
     index.ts              # arranca el servidor
     schema.ts             # ensambla: typeDefs = [authors, books], resolvers = [authors, books]
-    context.ts            # contexto por petición (db, repo, loaders, role)
+    context.ts            # contexto por petición (repo, loaders, role)
+    database.ts           # conexión SQLite, tablas y semilla (paso 11)
     errors.ts · plugins.ts · repository.ts · data.ts · shared.ts
     modules/
       authors/{typeDefs,resolvers}.ts
@@ -304,3 +307,51 @@ GraphQL usa un *resolver por defecto* que lee la propiedad con el mismo nombre d
 
   Pendiente opcional: `graphql-codegen`, que genera tipos TypeScript desde el schema para no escribir a mano
   las interfaces de argumentos (`AddBookArgs`, etc.) ni el tipo de los resolvers.
+- [x] **Paso 11: Persistencia real con SQLite**
+
+  Hasta ahora los datos eran arreglos en memoria. Ahora viven en un archivo SQLite (`data/library.db`) y
+  **sobreviven a los reinicios**. La API GraphQL no cambia: el schema, las queries y las mutations son las mismas.
+  Lo único que cambió es la capa de datos, y por eso es una buena demostración de por qué el schema y el
+  almacenamiento son cosas independientes.
+
+  **Por qué `node:sqlite`.** Viene incluido en Node (sin dependencias ni compilación nativa) y basta para aprender.
+  Se usa SQL escrito a mano para ver exactamente qué consulta lanza cada resolver. En un proyecto real
+  se suele usar un ORM o query builder (Drizzle, Prisma, Kysely).
+
+  **Esquema** (`src/database.ts`, se crea solo al arrancar y se siembra con los datos iniciales si está vacía):
+  ```sql
+  CREATE TABLE authors (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL);
+  CREATE TABLE books (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, year INTEGER NOT NULL,
+    author_id INTEGER NOT NULL REFERENCES authors(id)
+  );
+  CREATE INDEX idx_books_author_id ON books(author_id);
+  ```
+
+  **Uso**
+  | Qué | Cómo |
+  |---|---|
+  | Arrancar | `npm run dev` (crea `data/library.db` la primera vez; está en `.gitignore`) |
+  | Volver a los datos iniciales | detén el servidor y `npm run db:reset` |
+  | Usar otro archivo | `DB_PATH=ruta/otra.db` (o `:memory:` para una BD temporal) |
+  | Ver el SQL ejecutado | consola del servidor: cada petición lista sus sentencias reales |
+  | Inspeccionar la BD | cualquier visor SQLite (p. ej. DB Browser for SQLite) abriendo `data/library.db` |
+
+  **Lo que hay que entender**
+  1. **Consultas parametrizadas.** Los `?` de `src/repository.ts` son parámetros: el valor viaja aparte del texto SQL y
+     nunca se interpreta como código. Así se evita la **inyección SQL**. Nunca concatenes valores del cliente en el SQL.
+     Comprobado: `book(id: "1; DROP TABLE books;--")` devuelve `null` y la tabla sigue intacta (además el repositorio
+     descarta ids que no sean enteros sin llegar a consultar la BD).
+  2. **IDs.** GraphQL expone `ID` como string; la BD guarda enteros. El repositorio traduce en ambos sentidos
+     (`String(row.id)` al leer, número al consultar). `AUTOINCREMENT` no reutiliza ids de filas borradas.
+  3. **Claves foráneas.** SQLite las trae **apagadas** en cada conexión; `PRAGMA foreign_keys = ON` las activa.
+     Con eso la BD impide un libro con autor inexistente (`FOREIGN KEY constraint failed`) aunque falle la validación
+     de la aplicación. La validación del resolver sigue ahí porque devuelve un error con código (`BAD_USER_INPUT`).
+  4. **`RETURNING`.** `INSERT`/`UPDATE ... RETURNING` devuelve la fila resultante en la misma sentencia (sin un
+     `SELECT` aparte), y por eso las mutations devuelven el recurso con una sola consulta.
+  5. **Actualización parcial en SQL.** `SET title = COALESCE(?, title)` conserva el valor actual si no se envía el campo.
+  6. **DataLoader sigue valiendo.** Con SQL real el ahorro es el mismo: `{ books { author { name } } }` ejecuta
+     2 sentencias (`SELECT ... FROM books` y `SELECT ... FROM authors WHERE id IN (?, ?, ?)`) en vez de 5.
+     `extensions.dbQueries` ahora cuenta también las escrituras (un `addBook` = 2: validar autor + `INSERT`).
+  7. **Una conexión para todo el proceso, un `Repository` por petición.** SQLite es un archivo local y `DatabaseSync`
+     es síncrono; en una BD de red (Postgres) usarías un *pool* de conexiones.

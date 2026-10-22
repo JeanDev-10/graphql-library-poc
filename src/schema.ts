@@ -1,5 +1,6 @@
 import type { AuthorRecord, BookRecord } from './data.js';
-import type { Context, Db } from './context.js';
+import type { Context } from './context.js';
+import type { Db } from './repository.js';
 import { badUserInput, forbidden } from './errors.js';
 
 // Schema (SDL). El comentario #graphql activa el resaltado de sintaxis en editores.
@@ -99,14 +100,14 @@ interface IdArgs {
 // llegan en `context.db` (paso 8).
 export const resolvers = {
   Query: {
-    books: (_parent: unknown, _args: unknown, { db }: Context) => db.books,
-    authors: (_parent: unknown, _args: unknown, { db }: Context) => db.authors,
-    // find() devuelve undefined si no hay coincidencia; `?? null` lo convierte en null,
+    books: (_parent: unknown, _args: unknown, { repo }: Context) => repo.allBooks(),
+    authors: (_parent: unknown, _args: unknown, { repo }: Context) => repo.allAuthors(),
+    // El repositorio devuelve undefined si no hay coincidencia; `?? null` lo convierte en null,
     // que es lo que GraphQL espera para un campo nullable (Book, sin "!").
-    book: (_parent: unknown, args: IdArgs, { db }: Context) =>
-      db.books.find((b) => b.id === args.id) ?? null,
-    author: (_parent: unknown, args: IdArgs, { db }: Context) =>
-      db.authors.find((a) => a.id === args.id) ?? null,
+    book: async (_parent: unknown, args: IdArgs, { repo }: Context) =>
+      (await repo.bookById(args.id)) ?? null,
+    author: async (_parent: unknown, args: IdArgs, { repo }: Context) =>
+      (await repo.authorById(args.id)) ?? null,
   },
 
   // Las mutations modifican los datos y devuelven el recurso resultante, para que el
@@ -148,11 +149,13 @@ export const resolvers = {
   Book: {
     // BookRecord solo tiene authorId; aquí lo "traducimos" al objeto Author que promete el schema.
     // El `!` del schema garantiza que no puede ser null, por eso usamos `!` en TypeScript.
-    author: (book: BookRecord, _args: unknown, { db }: Context) =>
-      db.authors.find((a) => a.id === book.authorId)!,
+    // VERSIÓN INGENUA: una consulta por cada libro (problema N+1).
+    author: async (book: BookRecord, _args: unknown, { repo }: Context) =>
+      (await repo.authorById(book.authorId))!,
   },
   Author: {
-    books: (author: AuthorRecord, _args: unknown, { db }: Context) =>
-      db.books.filter((b) => b.authorId === author.id),
+    // VERSIÓN INGENUA: una consulta por cada autor (problema N+1).
+    books: (author: AuthorRecord, _args: unknown, { repo }: Context) =>
+      repo.booksByAuthorId(author.id),
   },
 };

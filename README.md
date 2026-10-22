@@ -27,6 +27,28 @@ curl -X POST http://localhost:4000/ -H "Content-Type: application/json" \
   -d '{"query":"{ hello }"}'
 ```
 
+**Opción 3: Insomnia / Postman.**
+
+1. Nueva request `POST` a `http://localhost:4000/`.
+2. En **Body** elige **GraphQL**: verás una caja para la **Query** y otra para las **Variables** (solo el JSON de variables).
+3. Usa *Refresh Schema* para tener autocompletado (usa introspección).
+4. Reinicia el servidor para volver a los datos iniciales (autores `1-3`, libros `1-4`).
+
+Si prefieres JSON crudo (*raw → JSON*), el body es:
+```json
+{ "query": "query($id: ID!){ book(id:$id){ title } }", "variables": { "id": "3" } }
+```
+con el header `Content-Type: application/json`.
+
+## Cómo viaja una petición
+
+- Hay **un solo endpoint** (`/`). Las operaciones se distinguen por el contenido del body, no por la URL.
+- **POST** (JSON con `query`, `variables`, `operationName`) sirve para todo. **GET** solo para queries
+  (query y variables van en la URL) y las mutations por GET se rechazan.
+- Los errores de negocio suelen venir con HTTP 200 y un array `errors` en el cuerpo.
+- Un cliente Angular no arma el POST a mano: usa **Apollo Angular**, donde defines el documento
+  (`gql`) y las `variables`, y la librería hace la petición y cachea el resultado.
+
 ## Conceptos clave
 
 | Concepto | Qué es | Dónde está |
@@ -120,7 +142,57 @@ GraphQL usa un *resolver por defecto* que lee la propiedad con el mismo nombre d
     **en serie** (en orden) y los de una query pueden ejecutarse en paralelo. Por eso las escrituras van en `Mutation`.
   - **Actualización parcial**: `UpdateBookInput` tiene todos los campos opcionales y el resolver usa `??`
     para conservar el valor actual de lo que no se envía.
-- [ ] Paso 7: Variables, alias y fragments
+- [x] **Paso 7: Variables, alias, fragments y directivas**: sin cambios de código en el servidor;
+  son funciones del lenguaje de consulta que ya trae GraphQL. Se aprenden desde el cliente.
+
+  **Variables.** Se declaran en la operación (`$id: ID!`) y los valores viajan aparte en `variables`.
+  Evitan concatenar strings (y con ello inyecciones) y permiten reutilizar la misma consulta.
+  ```graphql
+  query GetBook($id: ID!) { book(id: $id) { title } }
+  ```
+  Variables: `{ "id": "3" }`
+
+  **Fragments.** Bloque de campos reutilizable, para no repetir la selección.
+  ```graphql
+  fragment BookCard on Book { id title year author { name } }
+
+  query {
+    books { ...BookCard }
+    libro3: book(id: "3") { ...BookCard }
+  }
+  ```
+
+  **Directivas** `@include(if:)` y `@skip(if:)`: incluyen o excluyen campos según una variable.
+  ```graphql
+  query Books($withAuthor: Boolean!, $hideYear: Boolean!) {
+    books {
+      title
+      year @skip(if: $hideYear)
+      author @include(if: $withAuthor) { name }
+    }
+  }
+  ```
+  Variables: `{ "withAuthor": true, "hideYear": true }` → solo `title` y `author`.
+
+  **Varias operaciones en un documento.** Si hay más de una, hay que indicar cuál ejecutar con
+  `operationName` (Insomnia/Sandbox lo preguntan). Sin él: `Must provide operation name if query contains multiple operations`.
+
+  **Mutations en serie.** Los campos raíz de una mutation se ejecutan **en orden**. Con datos iniciales:
+  ```graphql
+  mutation {
+    a: addAuthor(input: { name: "Autor nuevo" }) { id }          # recibe id "4"
+    b: addBook(input: { title: "Libro nuevo", year: 2024, authorId: "4" }) { id title author { name } }
+  }
+  ```
+  Si inviertes el orden (`b` antes que `a`), falla con `El autor con id 4 no existe`. Con una query, en cambio,
+  el orden no afecta, porque los campos pueden resolverse en paralelo.
+
+  **Errores de validación de variables** (se detectan antes de ejecutar):
+  | Caso | Mensaje |
+  |---|---|
+  | Usar `$id` sin declararla | `Variable "$id" is not defined.` |
+  | Declarar `$x` y no usarla | `Variable "$x" is never used.` |
+  | No enviar una variable `ID!` | `Variable "$id" of required type "ID!" was not provided.` |
 - [ ] Paso 8: Context y manejo de errores
 - [ ] Paso 9: Problema N+1 y DataLoader
 - [ ] Paso 10: Separar en módulos

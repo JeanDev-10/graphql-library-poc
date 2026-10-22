@@ -53,8 +53,9 @@ con el header `Content-Type: application/json`.
 
 | Concepto | Qué es | Dónde está |
 |---|---|---|
-| **Schema (`typeDefs`)** | Contrato tipado: qué datos y operaciones existen | `src/schema.ts` |
-| **Resolvers** | Funciones que obtienen el valor de cada campo | `src/schema.ts` |
+| **Schema (`typeDefs`)** | Contrato tipado: qué datos y operaciones existen | `src/modules/*/typeDefs.ts` |
+| **Resolvers** | Funciones que obtienen el valor de cada campo | `src/modules/*/resolvers.ts` |
+| **Ensamblado** | Junta los módulos en un único schema | `src/schema.ts` |
 | **Datos** | "Base de datos" en memoria (libros y autores) | `src/data.ts` |
 | **Context** | Objeto por petición con `db` y `role`, 3.er argumento de los resolvers | `src/context.ts` |
 | **Errores** | Errores con código y enmascarado de errores internos | `src/errors.ts` |
@@ -277,4 +278,29 @@ GraphQL usa un *resolver por defecto* que lee la propiedad con el mismo nombre d
 
   Comprobado: dos `addBook` al mismo autor en una sola petición devuelven la lista de libros actualizada
   después de cada uno.
-- [ ] Paso 10: Separar en módulos
+- [x] **Paso 10: Separar en módulos por dominio**: sin cambios de comportamiento (el schema expone exactamente lo mismo).
+
+  Un solo `schema.ts` con todo no escala. Ahora cada dominio vive en su carpeta con sus `typeDefs` y `resolvers`:
+  ```
+  src/
+    index.ts              # arranca el servidor
+    schema.ts             # ensambla: typeDefs = [authors, books], resolvers = [authors, books]
+    context.ts            # contexto por petición (db, repo, loaders, role)
+    errors.ts · plugins.ts · repository.ts · data.ts · shared.ts
+    modules/
+      authors/{typeDefs,resolvers}.ts
+      books/{typeDefs,resolvers}.ts
+  ```
+  Apollo Server acepta **arreglos** en `typeDefs` y `resolvers` y los fusiona. Dos detalles:
+  - **Las raíces `Query`/`Mutation`:** exactamente un módulo las declara (`authors`) y los demás las amplían con
+    `extend type Query { ... }` (`books`). Si ningún módulo declara la base, el servidor no arranca
+    (`Cannot extend type "Query" because it is not defined`), y una raíz vacía tampoco es válida.
+  - **Los resolvers del mismo tipo se combinan:** `Query` de authors y de books se suman en una sola `Query`.
+    Los tipos pueden referirse entre módulos (`Author.books` usa `Book`, `Book.author` usa `Author`).
+
+  **Cómo añadir un módulo nuevo** (p. ej. `genres`):
+  1. Crea `src/modules/genres/typeDefs.ts` (con `extend type Query { ... }`) y `resolvers.ts`.
+  2. Agrégalos a los arreglos de `src/schema.ts`.
+
+  Pendiente opcional: `graphql-codegen`, que genera tipos TypeScript desde el schema para no escribir a mano
+  las interfaces de argumentos (`AddBookArgs`, etc.) ni el tipo de los resolvers.

@@ -58,6 +58,9 @@ con el header `Content-Type: application/json`.
 | **Datos** | "Base de datos" en memoria (libros y autores) | `src/data.ts` |
 | **Context** | Objeto por petición con `db` y `role`, 3.er argumento de los resolvers | `src/context.ts` |
 | **Errores** | Errores con código y enmascarado de errores internos | `src/errors.ts` |
+| **Repository** | Capa de acceso a datos que simula SQL y cuenta consultas | `src/repository.ts` |
+| **DataLoader** | Agrupa lecturas en lotes y cachea por petición (soluciona N+1) | `src/context.ts` |
+| **Plugin** | Muestra el nº de consultas por petición (`extensions.dbQueries`) | `src/plugins.ts` |
 | **Servidor** | Une schema + resolvers y los expone por HTTP en un único endpoint | `src/index.ts` |
 
 ### Resolver por defecto
@@ -233,5 +236,45 @@ GraphQL usa un *resolver por defecto* que lee la propiedad con el mismo nombre d
 
   Regla: cuando un campo `!` falla, el `null` sube hasta el primer padre **nullable**. Por eso conviene que
   los campos que pueden fallar sean nullable: así un fallo no tumba toda la respuesta.
-- [ ] Paso 9: Problema N+1 y DataLoader
+- [x] **Paso 9: Problema N+1 y DataLoader**
+
+  **El problema.** `Book.author` se ejecuta una vez por libro. Con una BD real, cada ejecución sería una
+  consulta SQL: 1 consulta para la lista + N para los autores = **N+1**. Con 4 libros ya son 5; con 1000, 1001.
+
+  **Cómo se mide.** `src/repository.ts` simula la BD y anota cada "consulta SQL". Un plugin (`src/plugins.ts`)
+  las cuenta: la lista completa sale en la consola del servidor y el número viaja en la respuesta, en
+  `extensions.dbQueries` (solo para la PoC; en producción no se expondría). Pruébalo en Insomnia: el campo
+  aparece junto a `data`, y el log del servidor muestra las consultas.
+
+  | Query | Antes (ingenuo) | Con DataLoader |
+  |---|---|---|
+  | `{ books { title } }` | 1 | 1 |
+  | `{ books { title author { name } } }` | **5** | **2** |
+  | `{ authors { name books { title } } }` | **4** | **2** |
+  | `{ authors { books { author { name } } } }` | **8** | **3** |
+
+  El commit `Paso 9a` conserva la versión ingenua si quieres ver el "antes" (`git show f4872bc`).
+
+  **La solución: DataLoader** (paquete `dataloader`). En vez de consultar de inmediato, `loader.load(id)`
+  solo *anota* el id. Cuando termina el ciclo actual del event loop, el loader llama **una vez** a la función de
+  lote con todos los ids acumulados, y reparte cada resultado a quien lo pidió:
+  ```ts
+  authorById: new DataLoader(async (ids) => {
+    const found = await repo.authorsByIds(ids);        // UNA consulta: WHERE id IN (...)
+    return ids.map((id) => found.find((a) => a.id === id)); // mismo orden y longitud que `ids`
+  })
+  ```
+  En el resolver cambia una línea: `loaders.authorById.load(book.authorId)`.
+
+  **Reglas importantes**
+  1. **Un loader por petición**, creado en el contexto (`createLoaders` en `src/context.ts`). Cachea lo que carga;
+     compartirlo entre peticiones serviría datos viejos y mezclaría datos entre usuarios.
+  2. **El lote debe devolver un arreglo de la misma longitud y en el mismo orden que las claves**
+     (`undefined` o `[]` donde no haya resultado). Una BD no garantiza orden ni devuelve huecos.
+  3. **Tras escribir, invalida la caché** con `loader.clear(clave)`. Si no, dos mutations en la misma petición
+     podrían leer una lista vieja. Las mutations `addBook`, `updateBook` y `deleteBook` lo hacen.
+  4. Los ids repetidos se cargan una sola vez: con 4 libros de 3 autores se piden 3 autores, no 4.
+
+  Comprobado: dos `addBook` al mismo autor en una sola petición devuelven la lista de libros actualizada
+  después de cada uno.
 - [ ] Paso 10: Separar en módulos

@@ -42,4 +42,17 @@ export class Repository {
     this.log(`SELECT * FROM books WHERE author_id = ${authorId}`);
     return this.db.books.filter((b) => b.authorId === authorId);
   }
+
+  // Versiones por LOTE: una sola consulta con IN (...) en vez de una por id.
+  // Las usan los DataLoaders. Ojo: no garantizan el orden ni devuelven huecos
+  // para ids que no existen; el DataLoader se encarga de reordenarlos.
+  async authorsByIds(ids: readonly string[]) {
+    this.log(`SELECT * FROM authors WHERE id IN (${ids.join(', ')})`);
+    return this.db.authors.filter((a) => ids.includes(a.id));
+  }
+
+  async booksByAuthorIds(authorIds: readonly string[]) {
+    this.log(`SELECT * FROM books WHERE author_id IN (${authorIds.join(', ')})`);
+    return this.db.books.filter((b) => authorIds.includes(b.authorId));
+  }
 }

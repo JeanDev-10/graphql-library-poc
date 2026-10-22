@@ -118,27 +118,32 @@ export const resolvers = {
       db.authors.push(author);
       return author;
     },
-    addBook: (_parent: unknown, { input }: AddBookArgs, { db }: Context) => {
+    addBook: (_parent: unknown, { input }: AddBookArgs, { db, loaders }: Context) => {
       assertAuthorExists(db, input.authorId);
       const book: BookRecord = { id: nextId(db.books), ...input };
       db.books.push(book);
+      // Los loaders cachean durante la petición: tras escribir hay que invalidar lo afectado.
+      loaders.booksByAuthorId.clear(input.authorId);
       return book;
     },
-    updateBook: (_parent: unknown, { id, input }: UpdateBookArgs, { db }: Context) => {
+    updateBook: (_parent: unknown, { id, input }: UpdateBookArgs, { db, loaders }: Context) => {
       const book = db.books.find((b) => b.id === id);
       if (!book) return null;
       if (input.authorId != null) assertAuthorExists(db, input.authorId);
+      loaders.booksByAuthorId.clear(book.authorId); // autor anterior
+      if (input.authorId != null) loaders.booksByAuthorId.clear(input.authorId); // autor nuevo
       // `??` conserva el valor actual si el cliente no envió el campo (o envió null).
       book.title = input.title ?? book.title;
       book.year = input.year ?? book.year;
       book.authorId = input.authorId ?? book.authorId;
       return book;
     },
-    deleteBook: (_parent: unknown, { id }: IdArgs, { db, role }: Context) => {
+    deleteBook: (_parent: unknown, { id }: IdArgs, { db, loaders, role }: Context) => {
       // Autorización: el contexto sabe QUIÉN pregunta; el resolver decide si puede.
       if (role !== 'admin') throw forbidden('Solo un admin puede eliminar libros');
       const index = db.books.findIndex((b) => b.id === id);
       if (index === -1) return false;
+      loaders.booksByAuthorId.clear(db.books[index]!.authorId);
       db.books.splice(index, 1);
       return true;
     },
@@ -149,13 +154,13 @@ export const resolvers = {
   Book: {
     // BookRecord solo tiene authorId; aquí lo "traducimos" al objeto Author que promete el schema.
     // El `!` del schema garantiza que no puede ser null, por eso usamos `!` en TypeScript.
-    // VERSIÓN INGENUA: una consulta por cada libro (problema N+1).
-    author: async (book: BookRecord, _args: unknown, { repo }: Context) =>
-      (await repo.authorById(book.authorId))!,
+    // Con DataLoader: cada llamada a load() solo "pide" el autor; el loader junta todos los ids
+    // de la misma tanda y hace UNA consulta. Los ids repetidos se cargan una sola vez (caché).
+    author: async (book: BookRecord, _args: unknown, { loaders }: Context) =>
+      (await loaders.authorById.load(book.authorId))!,
   },
   Author: {
-    // VERSIÓN INGENUA: una consulta por cada autor (problema N+1).
-    books: (author: AuthorRecord, _args: unknown, { repo }: Context) =>
-      repo.booksByAuthorId(author.id),
+    books: (author: AuthorRecord, _args: unknown, { loaders }: Context) =>
+      loaders.booksByAuthorId.load(author.id),
   },
 };
